@@ -1,114 +1,72 @@
 const axios = require('axios');
 const md5 = require('md5');
 
-// --- 你的 SESSDATA (已硬编码) ---
-// 注意：这是你的敏感信息，请勿泄露给他人
+// --- 你的 SESSDATA (保持不变) ---
 const SESSDATA = "67f236f2%2C1778895861%2Cc47f5%2Ab1CjA8BxQ8sBT2cDATzxP4tzrOKku-c4EADJiZoxTPiefa3GEwr-JWKle-W8cagt99DEkSVl9nZVo4cUo3Ty1TSm94bFBSaDdIMEU5R2NNVEdGVTZMYXFhNHZEbVdyNnY5YTI5TGc3ZW1Sa1ZnRVdjZ3htNEw3MVZMLXQ3YUF6QlhVckx0S2pwZU1BIIEC";
 
-// B站 Wbi 签名算法表
-const mixinKeyEncTab = [
-  46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
-  33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40,
-  61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11,
-  36, 20, 34, 44, 52
-];
+// 安卓端 AppKey 和 Secret (B站官方客户端 Key)
+const APP_KEY = 'iVGUTjsxvpLeuDCf';
+const APP_SEC = 'aHRmhWMLkdeMuILqORnYZocwMBpMEOdt';
 
-// 获取 Mixin Key
-const getMixinKey = (orig) => mixinKeyEncTab.map(n => orig[n]).join('').slice(0, 32);
-
-// Wbi 签名计算函数
-function encWbi(params, img_key, sub_key) {
-  const mixin_key = getMixinKey(img_key + sub_key),
-    curr_time = Math.round(Date.now() / 1000),
-    chr_filter = /[!'()*]/g;
-
-  Object.assign(params, { wts: curr_time }); 
-  
-  const query = Object
-    .keys(params)
-    .sort()
-    .map(key => {
-      const value = params[key].toString().replace(chr_filter, '');
-      return `${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
-    })
-    .join('&');
-    
-  const wbi_sign = md5(query + mixin_key);
-  return query + '&w_rid=' + wbi_sign;
-}
-
-// 获取 B 站最新的加密 Key
-async function getWbiKeys(cookie) {
-  try {
-    const { data } = await axios.get('https://api.bilibili.com/x/web-interface/nav', {
-      headers: { 
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Cookie": cookie 
-      }
-    });
-    
-    const img_url = data.data.wbi_img.img_url;
-    const sub_url = data.data.wbi_img.sub_url;
-    
-    return {
-      img_key: img_url.substring(img_url.lastIndexOf('/') + 1, img_url.lastIndexOf('.')),
-      sub_key: sub_url.substring(sub_url.lastIndexOf('/') + 1, sub_url.lastIndexOf('.'))
-    };
-  } catch (e) {
-    console.error("获取 Key 失败:", e.message);
-    throw e;
+// App 签名算法
+function getSign(params) {
+  let items = Object.keys(params).sort();
+  let result = [];
+  for (let key of items) {
+    result.push(`${key}=${params[key]}`);
   }
+  let str = result.join('&');
+  return md5(str + APP_SEC);
 }
 
-// Vercel 云函数入口
 module.exports = async (req, res) => {
   const { bvid } = req.query;
 
   if (!bvid) {
-    return res.status(400).json({ code: -1, message: "缺少 bvid 参数" });
+    return res.status(400).json({ code: -1, message: "No bvid" });
   }
 
   try {
-    // 1. 组装 Cookie
+    // 1. 准备 App 专用 Cookie (只需要 SESSDATA)
     const cookie = `SESSDATA=${SESSDATA}`;
-    const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
-    // 2. 获取 Wbi Key
-    const { img_key, sub_key } = await getWbiKeys(cookie);
-
-    // 3. 获取 CID
-    const cidRes = await axios.get(`https://api.bilibili.com/x/player/pagelist?bvid=${bvid}`, {
-       headers: { "User-Agent": userAgent, "Cookie": cookie }
-    });
     
-    if (cidRes.data.code !== 0) {
-        throw new Error(`CID 获取失败: ${cidRes.data.message}`);
-    }
+    // 2. 获取 CID (这一步用 Web 接口没关系，只是拿个 ID)
+    const cidRes = await axios.get(`https://api.bilibili.com/x/player/pagelist?bvid=${bvid}`);
     const cid = cidRes.data.data[0].cid;
 
-    // 4. 准备参数 (请求 1080P)
+    // 3. 构造安卓端请求参数
+    // 关键点：platform=android, fnval=1 (强制请求 MP4, 不用 DASH)
     const params = {
+      appkey: APP_KEY,
       bvid: bvid,
       cid: cid,
-      qn: 80,      // 80 = 1080P
-      fnval: 16,   
+      qn: 80,        // 试图请求 1080P
+      fnval: 1,      // 1 = MP4格式 (iOS友好), 16 = DASH
       fnver: 0,
-      fourk: 1
+      fourk: 1,      // 允许 4K
+      platform: 'android',
+      mobi_app: 'android',
+      build: 7060000, // 伪装成高版本客户端
+      ts: Math.round(Date.now() / 1000)
     };
-    
-    // 5. 计算签名并请求
-    const query = encWbi(params, img_key, sub_key);
-    const finalUrl = `https://api.bilibili.com/x/player/wbi/playurl?${query}`;
+
+    // 计算签名
+    params.sign = getSign(params);
+
+    // 构造查询字符串
+    const queryStr = Object.keys(params).map(k => `${k}=${params[k]}`).join('&');
+
+    // 4. 请求 App 播放接口
+    const finalUrl = `https://app.bilibili.com/x/v2/playurl?${queryStr}`;
     
     const playResp = await axios.get(finalUrl, {
       headers: {
-        "User-Agent": userAgent,
-        "Cookie": cookie,
-        "Referer": "https://www.bilibili.com/"
+        "User-Agent": "Bilibili Freedoooooom/MarkII", // 安卓客户端 UA
+        "Cookie": cookie
       }
     });
 
-    // 6. 返回数据
+    // 5. 返回结果
     res.status(200).json(playResp.data);
 
   } catch (error) {
