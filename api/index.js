@@ -1,6 +1,10 @@
 const axios = require('axios');
 const md5 = require('md5');
 
+// --- 你的 SESSDATA (已硬编码) ---
+// 注意：这是你的敏感信息，请勿泄露给他人
+const SESSDATA = "67f236f2%2C1778895861%2Cc47f5%2Ab1CjA8BxQ8sBT2cDATzxP4tzrOKku-c4EADJiZoxTPiefa3GEwr-JWKle-W8cagt99DEkSVl9nZVo4cUo3Ty1TSm94bFBSaDdIMEU5R2NNVEdGVTZMYXFhNHZEbVdyNnY5YTI5TGc3ZW1Sa1ZnRVdjZ3htNEw3MVZMLXQ3YUF6QlhVckx0S2pwZU1BIIEC";
+
 // B站 Wbi 签名算法表
 const mixinKeyEncTab = [
   46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
@@ -18,10 +22,8 @@ function encWbi(params, img_key, sub_key) {
     curr_time = Math.round(Date.now() / 1000),
     chr_filter = /[!'()*]/g;
 
-  // 必须加 wts 时间戳
   Object.assign(params, { wts: curr_time }); 
   
-  // 参数排序并拼接
   const query = Object
     .keys(params)
     .sort()
@@ -61,7 +63,6 @@ async function getWbiKeys(cookie) {
 // Vercel 云函数入口
 module.exports = async (req, res) => {
   const { bvid } = req.query;
-  const SESSDATA = process.env.SESSDATA || "";
 
   if (!bvid) {
     return res.status(400).json({ code: -1, message: "缺少 bvid 参数" });
@@ -75,7 +76,7 @@ module.exports = async (req, res) => {
     // 2. 获取 Wbi Key
     const { img_key, sub_key } = await getWbiKeys(cookie);
 
-    // 3. 获取 CID (视频 ID)
+    // 3. 获取 CID
     const cidRes = await axios.get(`https://api.bilibili.com/x/player/pagelist?bvid=${bvid}`, {
        headers: { "User-Agent": userAgent, "Cookie": cookie }
     });
@@ -85,21 +86,20 @@ module.exports = async (req, res) => {
     }
     const cid = cidRes.data.data[0].cid;
 
-    // 4. 准备参数
+    // 4. 准备参数 (请求 1080P)
     const params = {
       bvid: bvid,
       cid: cid,
       qn: 80,      // 80 = 1080P
-      fnval: 16,   // 16 = DASH 格式 (虽然我们只想要 URL，但这个参数能确保返回丰富数据)
+      fnval: 16,   
       fnver: 0,
-      fourk: 1     // 允许 4K
+      fourk: 1
     };
     
-    // 5. 计算签名
+    // 5. 计算签名并请求
     const query = encWbi(params, img_key, sub_key);
-
-    // 6. 请求最终视频流
     const finalUrl = `https://api.bilibili.com/x/player/wbi/playurl?${query}`;
+    
     const playResp = await axios.get(finalUrl, {
       headers: {
         "User-Agent": userAgent,
@@ -108,7 +108,7 @@ module.exports = async (req, res) => {
       }
     });
 
-    // 7. 返回数据给 Cloudflare
+    // 6. 返回数据
     res.status(200).json(playResp.data);
 
   } catch (error) {
