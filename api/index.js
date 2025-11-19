@@ -1,14 +1,14 @@
 const axios = require('axios');
 const md5 = require('md5');
 
-// --- 你的 SESSDATA (保持不变) ---
+// --- 你的 SESSDATA ---
 const SESSDATA = "67f236f2%2C1778895861%2Cc47f5%2Ab1CjA8BxQ8sBT2cDATzxP4tzrOKku-c4EADJiZoxTPiefa3GEwr-JWKle-W8cagt99DEkSVl9nZVo4cUo3Ty1TSm94bFBSaDdIMEU5R2NNVEdGVTZMYXFhNHZEbVdyNnY5YTI5TGc3ZW1Sa1ZnRVdjZ3htNEw3MVZMLXQ3YUF6QlhVckx0S2pwZU1BIIEC";
 
-// 安卓端 AppKey 和 Secret (B站官方客户端 Key)
-const APP_KEY = 'iVGUTjsxvpLeuDCf';
-const APP_SEC = 'aHRmhWMLkdeMuILqORnYZocwMBpMEOdt';
+// TV端 AppKey 和 Secret
+const APP_KEY = '4409e2ce8ffd12b8';
+const APP_SEC = '59b43e9d97fa1bb44463c50ce187ea2c';
 
-// App 签名算法
+// 签名算法
 function getSign(params) {
   let items = Object.keys(params).sort();
   let result = [];
@@ -27,46 +27,48 @@ module.exports = async (req, res) => {
   }
 
   try {
-    // 1. 准备 App 专用 Cookie (只需要 SESSDATA)
     const cookie = `SESSDATA=${SESSDATA}`;
     
-    // 2. 获取 CID (这一步用 Web 接口没关系，只是拿个 ID)
+    // 1. 获取 CID (复用 Web 接口)
     const cidRes = await axios.get(`https://api.bilibili.com/x/player/pagelist?bvid=${bvid}`);
+    if (cidRes.data.code !== 0) {
+        throw new Error("CID 获取失败");
+    }
     const cid = cidRes.data.data[0].cid;
 
-    // 3. 构造安卓端请求参数
-    // 关键点：platform=android, fnval=1 (强制请求 MP4, 不用 DASH)
+    // 2. 构造 TV 端请求参数
+    // 接口: /x/tv/ugc/playurl
     const params = {
       appkey: APP_KEY,
       bvid: bvid,
       cid: cid,
-      qn: 80,        // 试图请求 1080P
-      fnval: 1,      // 1 = MP4格式 (iOS友好), 16 = DASH
+      qn: 112,       // 试图请求 1080P+ (TV版通常用 112/80)
+      fnval: 16,     // DASH 格式
       fnver: 0,
-      fourk: 1,      // 允许 4K
+      fourk: 1,
       platform: 'android',
-      mobi_app: 'android',
-      build: 7060000, // 伪装成高版本客户端
+      mobi_app: 'android_tv', // 关键伪装
+      build: 102801,
       ts: Math.round(Date.now() / 1000)
     };
 
-    // 计算签名
     params.sign = getSign(params);
 
-    // 构造查询字符串
+    // 构造 Query
     const queryStr = Object.keys(params).map(k => `${k}=${params[k]}`).join('&');
 
-    // 4. 请求 App 播放接口
-    const finalUrl = `https://app.bilibili.com/x/v2/playurl?${queryStr}`;
+    // 3. 请求 TV 接口
+    const finalUrl = `https://api.bilibili.com/x/tv/ugc/playurl?${queryStr}`;
     
     const playResp = await axios.get(finalUrl, {
       headers: {
-        "User-Agent": "Bilibili Freedoooooom/MarkII", // 安卓客户端 UA
+        "User-Agent": "Mozilla/5.0 BiliDroid/1.0 (bbcallen@gmail.com)",
         "Cookie": cookie
       }
     });
 
-    // 5. 返回结果
+    // 4. 返回数据
+    // 注意：TV 接口返回的数据结构可能略有不同，但依然包含 durl 或 dash
     res.status(200).json(playResp.data);
 
   } catch (error) {
